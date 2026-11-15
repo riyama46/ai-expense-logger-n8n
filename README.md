@@ -2,14 +2,7 @@
 
 Send a chat message, a receipt photo or a bank screenshot to a Telegram bot. An LLM turns it into structured transactions, code checks the result against business rules, and the rows land in a Google Sheet ledger. The bot replies with a confirmation that can be undone.
 
-```
-you:  makan padang 25rb
-bot:  📥 Received
-bot:  ✅ Rp25.000 · Food · BCA · "makan padang"  (#T0042) · /undo
-
-you:  /cash 150000
-bot:  ✅ Cash set to Rp150.000. Logged Rp8.900 as unrecorded cash (#T0043)
-```
+![The bot chat: three messages sent while n8n was off, the saved entries, a question for a missing amount, and an undo](docs/demo-chat.png)
 
 I built it to replace manual entry in a money app, and run it every day for my own ledger. The data in this repository (categories, accounts, fixtures) is sample data.
 
