@@ -1,0 +1,108 @@
+{
+  "id": "ExpNudge00000001",
+  "name": "Nudge",
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "Asia/Jakarta" },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Daily 21:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [0, 300],
+      "parameters": { "rule": { "interval": [{ "field": "days", "triggerAtHour": 21 }] } }
+    },
+    {
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [220, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "sheetId", "name": "sheetId", "value": "YOUR_SHEET_ID", "type": "string" },
+            { "id": "chatId", "name": "chatId", "value": "YOUR_CHAT_ID", "type": "string" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Transactions",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [440, 300],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "read",
+        "documentId": { "__rl": true, "mode": "id", "value": "={{ $json.sheetId }}" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "Transactions" },
+        "options": {}
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "PLACEHOLDER", "name": "Google Sheets" } }
+    },
+    {
+      "name": "Count",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "parameters": {
+        "jsCode": [
+          "//@include messages.js",
+          "//@include commands.js",
+          "const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10); // Asia/Jakarta, no DST",
+          "const n = countToday($input.all().map((i) => i.json), today);",
+          "return [{ json: { today, reply: MSG.nudge(n) } }];"
+        ]
+      }
+    },
+    {
+      "name": "Send nudge",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [880, 300],
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $('Config').first().json.chatId }}",
+        "text": "={{ $json.reply.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }}",
+        "additionalFields": { "appendAttribution": false, "parse_mode": "HTML" }
+      },
+      "credentials": { "telegramApi": { "id": "PLACEHOLDER", "name": "Telegram Bot" } }
+    },
+    {
+      "name": "Save date",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [1100, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "update",
+        "documentId": { "__rl": true, "mode": "id", "value": "={{ $('Config').first().json.sheetId }}" },
+        "sheetName": { "__rl": true, "mode": "name", "value": "State" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": { "key": "last_nudge_date", "value": "={{ $('Count').first().json.today }}" },
+          "matchingColumns": ["key"],
+          "schema": [
+            { "id": "key", "displayName": "key", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true },
+            { "id": "value", "displayName": "value", "required": false, "defaultMatch": false, "display": true, "type": "string", "canBeUsedToMatch": true }
+          ]
+        },
+        "options": { "cellFormat": "RAW" }
+      },
+      "credentials": { "googleSheetsOAuth2Api": { "id": "PLACEHOLDER", "name": "Google Sheets" } }
+    }
+  ],
+  "connections": {
+    "Daily 21:00": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Transactions", "type": "main", "index": 0 }]] },
+    "Transactions": { "main": [[{ "node": "Count", "type": "main", "index": 0 }]] },
+    "Count": { "main": [[{ "node": "Send nudge", "type": "main", "index": 0 }]] },
+    "Send nudge": { "main": [[{ "node": "Save date", "type": "main", "index": 0 }]] }
+  }
+}

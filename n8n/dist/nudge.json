@@ -1,0 +1,249 @@
+{
+  "id": "ExpNudge00000001",
+  "name": "Nudge",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Daily 21:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 21
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "sheetId",
+              "name": "sheetId",
+              "value": "YOUR_SHEET_ID",
+              "type": "string"
+            },
+            {
+              "id": "chatId",
+              "name": "chatId",
+              "value": "YOUR_CHAT_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Transactions",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        440,
+        300
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.sheetId }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Transactions"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PLACEHOLDER",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "name": "Count",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const MSG_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];\r\n\r\nfunction fmtRp(n) {\r\n  const v = Math.round(Number(n) || 0);\r\n  return (v < 0 ? '-' : '') + 'Rp' + String(Math.abs(v)).replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\r\n}\r\n\r\nfunction fmtDate(d) {\r\n  const [y, m, day] = String(d).slice(0, 10).split('-').map(Number);\r\n  return MSG_MONTHS[m - 1] ? `${day} ${MSG_MONTHS[m - 1]} ${y}` : String(d);\r\n}\r\n\r\n// '2026-11' -> 'Nov 2026'\r\nfunction msgMonth(ym) {\r\n  const [y, m] = String(ym).split('-').map(Number);\r\n  return `${MSG_MONTHS[m - 1]} ${y}`;\r\n}\r\n\r\nfunction msgPlural(n, one, many) {\r\n  return `${n} ${n === 1 ? one : many}`;\r\n}\r\n\r\nfunction msgLine(r, names) {\r\n  const review = r.status === 'needs_review';\r\n  const parts = [fmtRp(r.amount)];\r\n  if (r.type === 'transfer') parts.push(`${r.account} → ${r.to_account}`);\r\n  else parts.push(names[r.category_id] || r.category_id, r.account);\r\n  const label = r.note || r.merchant;\r\n  if (label) parts.push(`\"${label}\"`);\r\n  if (r.nature) parts.push(r.nature);\r\n  return `${review ? '⚠️' : '✅'} ${parts.join(' · ')}  (#${r.id})${review ? ' · needs review' : ''}`;\r\n}\r\n\r\n// One entry on one line for /review and /last: mark, id, date, amount, where, label\r\nfunction msgBrief(r) {\r\n  const mark = r.status === 'needs_review' ? '⚠️' : '✅';\r\n  const where = r.type === 'transfer' ? `${r.account} → ${r.to_account}` : `${r.category_id} · ${r.account}`;\r\n  const label = r.merchant || r.note;\r\n  return `${mark} #${r.id} · ${fmtDate(r.txn_date)} · ${fmtRp(r.amount)} · ${where}${label ? ` · \"${label}\"` : ''}`;\r\n}\r\n\r\nconst MSG_LIST_MAX = 30;\r\n\r\nfunction msgList(rows) {\r\n  const lines = rows.slice(0, MSG_LIST_MAX).map(msgBrief);\r\n  if (rows.length > MSG_LIST_MAX) lines.push(`… and ${rows.length - MSG_LIST_MAX} more`);\r\n  return lines;\r\n}\r\n\r\nconst MSG = {\r\n  // rows: Transactions row objects of one batch; categories: Categories rows (for names)\r\n  saved(rows, categories) {\r\n    const names = {};\r\n    for (const c of categories || []) names[c.id] = c.name;\r\n    return rows.map((r, i) => msgLine(r, names) + (i === rows.length - 1 ? ' · /undo' : '')).join('\\n');\r\n  },\r\n  askAmount(text) {\r\n    const eg = text ? `${text} 18rb` : '18rb';\r\n    return `❓ How much was it? Reply with the amount, e.g. \"${eg}\".`;\r\n  },\r\n  askMissing(missing, hint) {\r\n    const what = (missing || []).join(', ');\r\n    return `❓ I need a bit more info${what ? `: ${what}` : ''}.${hint ? ` ${hint}` : ''} Please send it again with the details.`;\r\n  },\r\n  reviewOldDate(date) {\r\n    return `Check the date: ${fmtDate(date)} is more than two months back.`;\r\n  },\r\n  reviewOpening(account, openingDate) {\r\n    return `Check: dated on or before the ${account} opening balance (${fmtDate(openingDate)}), so it may be counted twice. /undo if so.`;\r\n  },\r\n  reviewTransfer(account) {\r\n    return `Check: saved as a transfer to your own ${account}. If you paid someone else, /undo and send it again with a caption, e.g. \"bayar utang 100rb\".`;\r\n  },\r\n  photoTooLong() {\r\n    return '❓ This screenshot is too long to read: Telegram shrinks it and the text gets too small. Nothing was saved. Send shorter screenshots instead, about two screens each.';\r\n  },\r\n  futureDate() {\r\n    return '❓ That date is in the future. For upcoming payments, add a rule in the Recurring tab.';\r\n  },\r\n  badAccount(name, accounts) {\r\n    const list = (accounts || []).map((a) => a.account).join(', ');\r\n    return `❓ I don't know the account \"${name}\". Accounts: ${list}.`;\r\n  },\r\n  badCategory(id) {\r\n    return `❓ The category \"${id}\" is missing or inactive. Check the Categories tab, then send it again.`;\r\n  },\r\n  needToAccount() {\r\n    return '❓ Which account did the money go to? Send it again with the destination account.';\r\n  },\r\n  sameAccount() {\r\n    return '❓ A transfer needs two different accounts. Send it again with the right ones.';\r\n  },\r\n  error(text, reason) {\r\n    const what = text ? `\"${text}\"` : 'your message';\r\n    return `🔴 Couldn't process ${what} (${reason || 'the AI service did not respond'}). Please send it again.`;\r\n  },\r\n  pending(n) {\r\n    return `📥 Processing ${msgPlural(n, 'pending message', 'pending messages')}`;\r\n  },\r\n  reviewHint() {\r\n    return 'All correct? Send /ok. Otherwise /review shows how to fix them.';\r\n  },\r\n  reviewList(rows) {\r\n    return [\r\n      `⚠️ ${msgPlural(rows.length, 'entry needs', 'entries need')} review`,\r\n      ...msgList(rows),\r\n      'All correct: /ok · some correct: /ok 16 25 · wrong: /undo 25, then send that one again as text.',\r\n    ].join('\\n');\r\n  },\r\n  reviewNone() {\r\n    return 'Nothing needs review.';\r\n  },\r\n  confirmed(ids) {\r\n    return `✅ Confirmed ${msgPlural(ids.length, 'entry', 'entries')} (${ids.map((i) => '#' + i).join(', ')}).`;\r\n  },\r\n  // what: 'void' for /undo, 'confirm' for /ok\r\n  badIds(tokens, what) {\r\n    const why = what === 'confirm' ? 'not found or not waiting for review' : 'not found or already void';\r\n    return `❓ Nothing changed: ${tokens.join(', ')} ${why}. Send /${what === 'confirm' ? 'review' : 'last'} to see the ids.`;\r\n  },\r\n  last(rows) {\r\n    return rows.length ? ['Latest entries', ...msgList(rows)].join('\\n') : 'No entries yet.';\r\n  },\r\n  voided(ids) {\r\n    return `↩️ Voided ${msgPlural(ids.length, 'entry', 'entries')} (${ids.map((i) => '#' + i).join(', ')}).`;\r\n  },\r\n  nothingToVoid() {\r\n    return 'Nothing to void.';\r\n  },\r\n  // accounts: [{account, balance}], liquidTotal: number\r\n  balance(accounts, liquidTotal) {\r\n    const lines = accounts.map((a) => `${a.account} · ${fmtRp(a.balance)}`);\r\n    return ['Balance', ...lines, `Liquid total · ${fmtRp(liquidTotal)}`].join('\\n');\r\n  },\r\n  summaryUsage() {\r\n    return '❓ Which month? Send \"/summary\" for this month or e.g. \"/summary 2026-10\".';\r\n  },\r\n  summaryEmpty(month) {\r\n    return `No entries in ${msgMonth(month)}.`;\r\n  },\r\n  // d: the totals built by cSummary (commands.js)\r\n  summary(d) {\r\n    const pct = (n) => `${d.expense ? Math.round((n / d.expense) * 100) : 0}%`;\r\n    const pairs = (list) => list.map((x) => `${x.name} ${fmtRp(x.amount)}`).join(' · ');\r\n    const out = [\r\n      `Summary · ${msgMonth(d.month)}${d.to ? ` (to ${fmtDate(d.to)})` : ''}`,\r\n      `Income · ${fmtRp(d.income)}`,\r\n      `Expense · ${fmtRp(d.expense)}`,\r\n      `Net · ${fmtRp(d.income - d.expense)}`,\r\n    ];\r\n    if (d.expense) {\r\n      out.push('', 'Expense by group');\r\n      for (const g of d.groups) {\r\n        out.push(`${g.name} · ${fmtRp(g.amount)} · ${pct(g.amount)}`);\r\n        for (const s of g.subs) out.push(`   ${s.name} · ${fmtRp(s.amount)}`);\r\n      }\r\n      const unset = d.expense - d.need - d.want;\r\n      out.push('', 'Need vs want', `Need · ${fmtRp(d.need)} · ${pct(d.need)}`, `Want · ${fmtRp(d.want)} · ${pct(d.want)}`);\r\n      if (unset) out.push(`Not set · ${fmtRp(unset)} · ${pct(unset)}`);\r\n      if (d.want) {\r\n        out.push(`Top want · ${pairs(d.topWant)}`);\r\n        out.push(`Want by day · weekday ${fmtRp(d.wantWeekday)} · weekend ${fmtRp(d.wantWeekend)}`);\r\n        if (d.wantTimes.length) out.push(`Want by time · ${pairs(d.wantTimes)}`);\r\n      }\r\n    }\r\n    if (d.irregular.length || d.irregularAvg) {\r\n      out.push('', 'Irregular');\r\n      for (const r of d.irregular) out.push(`${fmtDate(r.txn_date)} · ${fmtRp(r.amount)} · ${r.name}${r.label ? ` · \"${r.label}\"` : ''}`);\r\n      out.push(`12-month average · ${fmtRp(d.irregularAvg)} a month`);\r\n    }\r\n    out.push('', `Freelance income · ${fmtRp(d.freelance)}`);\r\n    if (d.review) out.push(`⚠️ ${msgPlural(d.review, 'entry needs', 'entries need')} review · /review`);\r\n    out.push(`Liquid total · ${fmtRp(d.liquid)}`);\r\n    const span = `the last ${msgPlural(d.fullMonths, 'full month', 'full months')}`;\r\n    if (!d.fullMonths) out.push('Runway · not enough history yet (needs one full month of entries)');\r\n    else if (!d.needAvg) out.push(`Runway · no \"need\" spending in ${span}`);\r\n    else out.push(`Runway · ${(d.liquid / d.needAvg).toFixed(1)} months (\"need\" spending ${fmtRp(d.needAvg)} a month over ${span})`);\r\n    return out.join('\\n');\r\n  },\r\n  cashAdjusted(real, diff, id) {\r\n    return `✅ Cash set to ${fmtRp(real)}. Logged ${fmtRp(Math.abs(diff))} as unrecorded cash (#${id}) · /undo`;\r\n  },\r\n  cashMatches(real) {\r\n    return `Cash matches at ${fmtRp(real)}. Nothing to log.`;\r\n  },\r\n  cashUsage() {\r\n    return '❓ How much cash do you have? Send e.g. \"/cash 150000\".';\r\n  },\r\n  help() {\r\n    return [\r\n      'Send a message or a receipt photo to log an entry, e.g. \"makan padang 25rb\".',\r\n      '/undo · void the last entry, or one by id, e.g. /undo or /undo 25',\r\n      '/last · show the latest entries, e.g. /last or /last 10',\r\n      '/review · list entries that need review, e.g. /review',\r\n      '/ok · confirm entries that need review, e.g. /ok or /ok 16 25',\r\n      '/summary · show a month in numbers, e.g. /summary or /summary 2026-10',\r\n      '/balance · show account balances, e.g. /balance',\r\n      '/cash <amount> · set real cash, e.g. /cash 150000',\r\n      '/help · show this list, e.g. /help',\r\n    ].join('\\n');\r\n  },\r\n  unknownCommand() {\r\n    return \"Unknown command. Send /help to see what's available.\";\r\n  },\r\n  nudge(n) {\r\n    return `${msgPlural(n, 'entry', 'entries')} today. Anything missing?`;\r\n  },\r\n};\nfunction cTrue(x) {\n  return x === true || String(x).toUpperCase() === 'TRUE';\n}\n\nfunction cNum(x) {\n  const n = Number(x);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction cIdNum(row) {\n  return parseInt(String(row.id).replace(/\\D/g, ''), 10) || 0;\n}\n\n// \"150000\", \"150.000\", \"150,000.00\", \"150rb\", \"1,5jt\" -> integer rupiah, or null\nfunction cParseAmount(arg) {\n  const m = /^(?:rp|idr)?\\s*(\\d+(?:[.,]\\d+)*)\\s*(rb|k|ribu|jt|juta)?$/i.exec(String(arg || '').trim());\n  if (!m) return null;\n  // cents (\"100.000,00\", \"150,000.00\", \"150000.00\") are dropped; every other separator groups thousands\n  if (!m[2]) return Number(m[1].replace(/[.,]\\d{2}$/, '').replace(/[.,]/g, ''));\n  const mult = /^(jt|juta)$/i.test(m[2]) ? 1e6 : 1e3;\n  // with a suffix a separator is a decimal (\"1,5jt\"), unless it groups thousands (\"1.500rb\")\n  const num = /^\\d{1,3}([.,]\\d{3})+$/.test(m[1]) ? m[1].replace(/[.,]/g, '') : m[1].replace(',', '.');\n  return Math.round(Number(num) * mult);\n}\n\nfunction cStatus(t) {\n  return String(t.status).toLowerCase();\n}\n\nfunction cById(a, b) {\n  return cIdNum(a) - cIdNum(b);\n}\n\n// \"25\", \"T0025\", \"#t25\", separated by spaces or commas -> {rows, unknown: [token]}\nfunction cPick(arg, transactions) {\n  const rows = [];\n  const unknown = [];\n  for (const token of String(arg || '').split(/[\\s,]+/).filter(Boolean)) {\n    const m = /^#?t?0*(\\d+)$/i.exec(token);\n    const row = m && transactions.find((t) => cIdNum(t) === Number(m[1]));\n    if (!row) unknown.push(token);\n    else if (!rows.includes(row)) rows.push(row);\n  }\n  return { rows, unknown };\n}\n\n// With ids: void exactly those entries, or nothing when one of them is unknown or already void\nfunction cUndoIds(arg, transactions) {\n  const { rows, unknown } = cPick(arg, transactions);\n  const bad = [...unknown, ...rows.filter((t) => cStatus(t) === 'void').map((t) => '#' + t.id)];\n  if (bad.length) return { reply: MSG.badIds(bad, 'void'), appendRows: [], voidIds: [] };\n  const voidIds = rows.map((t) => t.id);\n  return { reply: MSG.voided(voidIds), appendRows: [], voidIds };\n}\n\nfunction cReview(transactions) {\n  const rows = transactions.filter((t) => cStatus(t) === 'needs_review').sort(cById);\n  return { reply: rows.length ? MSG.reviewList(rows) : MSG.reviewNone(), appendRows: [], voidIds: [] };\n}\n\n// No ids: confirm every entry that needs review. With ids: exactly those, or nothing when one is not waiting\nfunction cOk(arg, transactions) {\n  const none = { appendRows: [], voidIds: [], okIds: [] };\n  let rows = transactions.filter((t) => cStatus(t) === 'needs_review').sort(cById);\n  if (String(arg || '').trim()) {\n    const pick = cPick(arg, transactions);\n    const bad = [...pick.unknown, ...pick.rows.filter((t) => cStatus(t) !== 'needs_review').map((t) => '#' + t.id)];\n    if (bad.length) return { ...none, reply: MSG.badIds(bad, 'confirm') };\n    rows = pick.rows;\n  }\n  if (!rows.length) return { ...none, reply: MSG.reviewNone() };\n  const okIds = rows.map((t) => t.id);\n  return { ...none, reply: MSG.confirmed(okIds), okIds };\n}\n\n// Newest first; 5 unless a number is given\nfunction cLast(arg, transactions) {\n  const n = Math.min(Math.max(parseInt(arg, 10) || 5, 1), 30);\n  const rows = transactions.filter((t) => cStatus(t) !== 'void').sort(cById).reverse().slice(0, n);\n  return { reply: MSG.last(rows), appendRows: [], voidIds: [] };\n}\n\nfunction cUndo(transactions) {\n  const live = transactions.filter((t) => String(t.status).toLowerCase() !== 'void');\n  if (!live.length) return { reply: MSG.nothingToVoid(), appendRows: [], voidIds: [] };\n  const last = live.reduce((a, b) => (cIdNum(b) > cIdNum(a) ? b : a));\n  const batch = live.filter((t) => t.id === last.id || (last.batch_id && t.batch_id === last.batch_id));\n  const voidIds = batch.map((t) => t.id);\n  return { reply: MSG.voided(voidIds), appendRows: [], voidIds };\n}\n\nfunction cBalance(accounts) {\n  const rows = accounts.map((a) => ({ account: a.account, balance: cNum(a.balance), liquid: cTrue(a.liquid) }));\n  const total = rows.filter((a) => a.liquid).reduce((sum, a) => sum + a.balance, 0);\n  return { reply: MSG.balance(rows, total), appendRows: [], voidIds: [] };\n}\n\nfunction cCash(arg, { accounts, nextIdNum, inbox, now, text }) {\n  const real = cParseAmount(arg);\n  if (real === null) return { reply: MSG.cashUsage(), appendRows: [], voidIds: [] };\n  const cash = accounts.find((a) => String(a.account).toLowerCase() === 'cash');\n  const diff = real - cNum(cash && cash.balance);\n  if (!diff) return { reply: MSG.cashMatches(real), appendRows: [], voidIds: [] };\n\n  const j = new Date(Date.parse(now) + 7 * 3600000).toISOString();\n  const id = 'T' + String(Number(nextIdNum)).padStart(4, '0');\n  const row = {\n    id,\n    inbox_update_id: inbox.update_id,\n    batch_id: 'B' + inbox.update_id,\n    created_at: j.slice(0, 19) + '+07:00',\n    txn_date: j.slice(0, 10),\n    txn_time: j.slice(11, 16),\n    type: diff < 0 ? 'expense' : 'income',\n    amount: Math.abs(diff),\n    account: 'Cash',\n    to_account: '',\n    category_id: 'unrecorded-cash',\n    nature: '',\n    merchant: '',\n    note: 'Cash count adjustment',\n    items: '',\n    receipt_total: '',\n    irregular: false,\n    source: 'adjustment',\n    recurring_id: '',\n    raw_input: text,\n    tg_file_id: '',\n    confidence: 1,\n    status: 'ok',\n  };\n  return { reply: MSG.cashAdjusted(real, diff, id), appendRows: [row], voidIds: [] };\n}\n\n// 'YYYY-MM' moved by n months\nfunction cMonthAdd(ym, n) {\n  const [y, m] = ym.split('-').map(Number);\n  return new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 7);\n}\n\nfunction cDay(t) {\n  return String(t.txn_date).slice(0, 10);\n}\n\nfunction cSum(rows) {\n  return rows.reduce((sum, t) => sum + cNum(t.amount), 0);\n}\n\n// [{name, amount}] largest first, from rows grouped by key(row)\nfunction cTotals(rows, key) {\n  const map = new Map();\n  for (const t of rows) map.set(key(t), (map.get(key(t)) || 0) + cNum(t.amount));\n  return [...map].map(([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount);\n}\n\n// arg: '' (the current month in Jakarta) or 'YYYY-MM'. All totals are computed here, never by the LLM.\nfunction cSummary(arg, { transactions, categories, accounts, now }) {\n  const none = { appendRows: [], voidIds: [] };\n  const today = new Date(Date.parse(now) + 7 * 3600000).toISOString().slice(0, 10);\n  const thisMonth = today.slice(0, 7);\n  const month = String(arg || '').trim() || thisMonth;\n  if (!/^\\d{4}-(0[1-9]|1[0-2])$/.test(month)) return { ...none, reply: MSG.summaryUsage() };\n\n  const cats = {};\n  for (const c of categories || []) cats[c.id] = c;\n  const name = (t) => (cats[t.category_id] || {}).name || t.category_id;\n  const group = (t) => (cats[t.category_id] || {}).group || 'Other';\n  const isType = (type) => (t) => String(t.type).toLowerCase() === type;\n  const nature = (n) => (t) => String(t.nature || '').toLowerCase() === n;\n\n  const live = transactions.filter((t) => cStatus(t) !== 'void' && t.source !== 'opening');\n  const rows = live.filter((t) => cDay(t).slice(0, 7) === month);\n  if (!rows.length) return { ...none, reply: MSG.summaryEmpty(month) };\n  const allExpenses = live.filter(isType('expense'));\n  const expenses = rows.filter(isType('expense'));\n  const incomes = rows.filter(isType('income'));\n  const wants = expenses.filter(nature('want'));\n\n  const weekend = (t) => [0, 6].includes(new Date(cDay(t) + 'T00:00:00Z').getUTCDay());\n  const bucket = (t) => {\n    const h = parseInt(String(t.txn_time || '').slice(0, 2), 10);\n    if (!(h >= 0 && h <= 23)) return '';\n    return h < 5 || h >= 22 ? 'night' : h < 11 ? 'morning' : h < 17 ? 'afternoon' : 'evening';\n  };\n\n  // 12 months ending with the summary month\n  const from = cMonthAdd(month, -11);\n  const irregular12 = allExpenses.filter((t) => cTrue(t.irregular) && cDay(t).slice(0, 7) >= from && cDay(t).slice(0, 7) <= month);\n\n  // Runway: liquid total / average \"need\" expense of the last 3 full months that have entries behind them\n  const openings = (accounts || []).map((a) => String(a.opening_date || '').slice(0, 10)).filter((d) => /^\\d{4}-\\d{2}-\\d{2}$/.test(d));\n  const start = (openings.length ? openings : live.map(cDay)).sort()[0];\n  const fullMonths = [-3, -2, -1].map((n) => cMonthAdd(thisMonth, n)).filter((ym) => start && ym + '-01' >= start);\n  const needs = allExpenses.filter((t) => nature('need')(t) && fullMonths.includes(cDay(t).slice(0, 7)));\n  const liquid = cSum((accounts || []).filter((a) => cTrue(a.liquid)).map((a) => ({ amount: a.balance })));\n\n  return {\n    ...none,\n    reply: MSG.summary({\n      month,\n      to: month === thisMonth ? today : '',\n      income: cSum(incomes),\n      expense: cSum(expenses),\n      groups: cTotals(expenses, group).map((g) => ({ ...g, subs: cTotals(expenses.filter((t) => group(t) === g.name), name) })),\n      need: cSum(expenses.filter(nature('need'))),\n      want: cSum(wants),\n      topWant: cTotals(wants, name).slice(0, 3),\n      wantWeekday: cSum(wants.filter((t) => !weekend(t))),\n      wantWeekend: cSum(wants.filter(weekend)),\n      wantTimes: ['morning', 'afternoon', 'evening', 'night']\n        .map((b) => ({ name: b, amount: cSum(wants.filter((t) => bucket(t) === b)) }))\n        .filter((b) => b.amount),\n      irregular: expenses\n        .filter((t) => cTrue(t.irregular))\n        .map((t) => ({ txn_date: cDay(t), amount: cNum(t.amount), name: name(t), label: t.note || t.merchant || '' })),\n      irregularAvg: cSum(irregular12) / 12,\n      freelance: cSum(incomes.filter((t) => t.category_id === 'income-freelance')),\n      review: rows.filter((t) => cStatus(t) === 'needs_review').length,\n      liquid,\n      fullMonths: fullMonths.length,\n      needAvg: fullMonths.length ? cSum(needs) / fullMonths.length : 0,\n    }),\n  };\n}\n\nfunction runCommand({ text, transactions, accounts, categories, nextIdNum, inbox, now }) {\n  const m = /^\\/(\\w+)(?:@\\w+)?(?:\\s+([\\s\\S]*))?$/.exec(String(text || '').trim());\n  const cmd = m ? m[1].toLowerCase() : '';\n  if (cmd === 'undo') return String(m[2] || '').trim() ? cUndoIds(m[2], transactions) : cUndo(transactions);\n  if (cmd === 'review') return cReview(transactions);\n  if (cmd === 'ok') return cOk(m[2], transactions);\n  if (cmd === 'last') return cLast(m[2], transactions);\n  if (cmd === 'summary') return cSummary(m[2], { transactions, categories, accounts, now });\n  if (cmd === 'balance') return cBalance(accounts);\n  if (cmd === 'cash') return cCash(m[2], { accounts, nextIdNum, inbox, now, text });\n  if (cmd === 'help') return { reply: MSG.help(), appendRows: [], voidIds: [] };\n  return { reply: MSG.unknownCommand(), appendRows: [], voidIds: [] };\n}\n\n// Entries dated today that the user logged (not void, not opening or adjustment rows)\nfunction countToday(transactions, today) {\n  return transactions.filter(\n    (t) =>\n      String(t.txn_date).slice(0, 10) === today &&\n      String(t.status).toLowerCase() !== 'void' &&\n      t.source !== 'opening' &&\n      t.source !== 'adjustment',\n  ).length;\n}\nconst today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10); // Asia/Jakarta, no DST\nconst n = countToday($input.all().map((i) => i.json), today);\nreturn [{ json: { today, reply: MSG.nudge(n) } }];"
+      }
+    },
+    {
+      "name": "Send nudge",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "={{ $('Config').first().json.chatId }}",
+        "text": "={{ $json.reply.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "PLACEHOLDER",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "name": "Save date",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1100,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.sheetId }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "State"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "key": "last_nudge_date",
+            "value": "={{ $('Count').first().json.today }}"
+          },
+          "matchingColumns": [
+            "key"
+          ],
+          "schema": [
+            {
+              "id": "key",
+              "displayName": "key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "value",
+              "displayName": "value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PLACEHOLDER",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 21:00": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Transactions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transactions": {
+      "main": [
+        [
+          {
+            "node": "Count",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Count": {
+      "main": [
+        [
+          {
+            "node": "Send nudge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send nudge": {
+      "main": [
+        [
+          {
+            "node": "Save date",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

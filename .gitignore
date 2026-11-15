@@ -1,0 +1,6 @@
+node_modules/
+.env
+*.local.*
+fixtures/receipts/*
+!fixtures/receipts/README.md
+.clasp.json

@@ -1,0 +1,8 @@
+{
+  "name": "ai-expense-logger-n8n",
+  "private": true,
+  "scripts": {
+    "test": "node --test",
+    "build": "node n8n/build.js"
+  }
+}
