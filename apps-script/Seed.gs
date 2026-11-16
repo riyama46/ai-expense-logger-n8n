@@ -318,6 +318,26 @@ const SEED = {
       "is_default": false
     }
   ],
+  "recurring": [
+    {
+      "id": "R001",
+      "name": "KPR & IPL",
+      "type": "expense",
+      "amount": 5000000,
+      "account": "BCA",
+      "to_account": "",
+      "category_id": "kpr-ipl",
+      "nature": "need",
+      "cycle": "monthly",
+      "interval": 1,
+      "day": 5,
+      "start_date": "2026-12-05",
+      "end_date": "",
+      "mode": "auto",
+      "last_run": "",
+      "active": true
+    }
+  ],
   "state": {
     "last_nudge_date": "",
     "llm_provider": "openai",

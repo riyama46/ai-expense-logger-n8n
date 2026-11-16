@@ -223,7 +223,7 @@ function cSummary(arg, { transactions, categories, accounts, now }) {
   };
 }
 
-function runCommand({ text, transactions, accounts, categories, nextIdNum, inbox, now }) {
+function runCommand({ text, transactions, accounts, categories, recurring, nextIdNum, inbox, now }) {
   const m = /^\/(\w+)(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(String(text || '').trim());
   const cmd = m ? m[1].toLowerCase() : '';
   if (cmd === 'undo') return String(m[2] || '').trim() ? cUndoIds(m[2], transactions) : cUndo(transactions);
@@ -233,6 +233,11 @@ function runCommand({ text, transactions, accounts, categories, nextIdNum, inbox
   if (cmd === 'summary') return cSummary(m[2], { transactions, categories, accounts, now });
   if (cmd === 'balance') return cBalance(accounts);
   if (cmd === 'cash') return cCash(m[2], { accounts, nextIdNum, inbox, now, text });
+  // "/recurring run" is what the daily Recurring workflow queues; plain "/recurring" only lists (needs recurring.js)
+  if (cmd === 'recurring') {
+    if (!/^run\b/i.test(String(m[2] || '').trim())) return listRecurring(recurring || [], now);
+    return runRecurring({ rules: recurring || [], transactions, accounts, categories: categories || [], nextIdNum, inbox, now });
+  }
   if (cmd === 'help') return { reply: MSG.help(), appendRows: [], voidIds: [] };
   return { reply: MSG.unknownCommand(), appendRows: [], voidIds: [] };
 }

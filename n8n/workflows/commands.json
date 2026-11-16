@@ -121,20 +121,57 @@
       "alwaysOutputData": true
     },
     {
+      "name": "Recurring",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        880,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Start').first().json.config.sheetId }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Recurring"
+        },
+        "operation": "read",
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PLACEHOLDER",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
       "name": "Run command",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        880,
+        1100,
         300
       ],
       "parameters": {
         "jsCode": [
           "//@include messages.js",
+          "//@include recurring.js",
           "//@include commands.js",
           "const inbox = $('Start').first().json;",
           "// A retried /undo would void one more batch, so an interrupted command is never re-run.",
-          "if (inbox.retry) throw new Error('it was interrupted and may already have run; check /balance first');",
+          "// \"/recurring run\" is the exception: it skips a date whose entry is already in the Sheet.",
+          "if (inbox.retry && !/^\\/recurring\\s+run\\b/i.test(String(inbox.text || '').trim())) throw new Error('it was interrupted and may already have run; check /balance first');",
           "const transactions = $('Transactions').all().map((i) => i.json).filter((t) => t.id); // empty tab gives one {} item",
           "const idNum = (t) => parseInt(String(t.id).replace(/\\D/g, ''), 10) || 0;",
           "const result = runCommand({",
@@ -142,6 +179,7 @@
           "  transactions,",
           "  accounts: $('Accounts').all().map((i) => i.json),",
           "  categories: $('Categories').all().map((i) => i.json).filter((c) => c.id),",
+          "  recurring: $('Recurring').all().map((i) => i.json).filter((r) => r.id), // a missing or empty tab means no rules",
           "  nextIdNum: transactions.reduce((n, t) => Math.max(n, idNum(t)), 0) + 1,",
           "  inbox,",
           "  now: new Date().toISOString(),",
@@ -186,6 +224,17 @@
       ]
     },
     "Categories": {
+      "main": [
+        [
+          {
+            "node": "Recurring",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recurring": {
       "main": [
         [
           {

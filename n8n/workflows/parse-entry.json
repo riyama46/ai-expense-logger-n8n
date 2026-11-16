@@ -357,6 +357,7 @@
           "  inbox,",
           "  categories: $('Categories').all().map((i) => i.json),",
           "  accounts: $('Accounts').all().map((i) => i.json),",
+          "  transactions: $('Transactions').all().map((i) => i.json).filter((t) => t.id),",
           "  nextIdNum: $('Transactions').all().reduce((n, i) => Math.max(n, idNum(i)), 0) + 1,",
           "  now: new Date().toISOString(),",
           "});",

@@ -79,7 +79,24 @@ function vNature(type, tag, cat, llm) {
   return pick.find((x) => x === 'need' || x === 'want') || '';
 }
 
-// Returns {rows} (main row, then fee row) or {reply}
+// Statement import: the existing entry this row repeats (same account and direction, same amount, date within
+// a day), or undefined. Each existing entry answers for one row only, so two equal payments on one day stay two.
+function vLogged(row, existing, used) {
+  const day = Date.parse(row.txn_date);
+  const out = row.type !== 'income';
+  const gap = (e) => Math.abs(Date.parse(String(e.txn_date).slice(0, 10)) - day);
+  const hits = existing.filter((e) => {
+    if (used.has(e) || String(e.status).toLowerCase() === 'void' || Math.round(vNum(e.amount)) !== row.amount || !(gap(e) <= 86400000)) return false;
+    const type = String(e.type).toLowerCase();
+    if (out) return (type === 'expense' || type === 'transfer') && e.account === row.account;
+    return (type === 'income' && e.account === row.account) || (type === 'transfer' && e.to_account === row.account);
+  });
+  const hit = hits.sort((a, b) => gap(a) - gap(b))[0];
+  if (hit) used.add(hit);
+  return hit;
+}
+
+// Returns {rows, review, split} (main row, then fee row) or {reply}
 function vBuildTxn(t, c) {
   const { categories, accounts, text } = c;
   let amount = Math.round(Math.abs(vNum(t.amount)));
@@ -101,6 +118,11 @@ function vBuildTxn(t, c) {
   if (c.inbox.kind === 'text' && t.type !== 'transfer') {
     const named = accounts.filter((a) => vNamed(text, a.account));
     if (named.length < 2) acc = named[0] || defaultAcc;
+  }
+  // "statement bni": the caption names the account the list belongs to
+  if (c.statement && t.type !== 'transfer') {
+    const named = accounts.filter((a) => vNamed(text, a.account));
+    if (named.length === 1) acc = named[0];
   }
 
   let toName = '';
@@ -126,6 +148,27 @@ function vBuildTxn(t, c) {
     if (opening && date <= opening) review.push(MSG.reviewOpening(a.account, opening));
   }
 
+  // Receipt split: the caption picked some of the items. Share = picked items plus their part of tax, service
+  // and discount: (total - subtotal) x picked / subtotal. The model only marks the items; the sum is done here.
+  const items = Array.isArray(t.items) ? t.items : [];
+  const mine = items.filter((i) => vTrue(i.selected));
+  let split = null;
+  const sum = (list) => list.reduce((s, i) => s + Math.abs(vNum(i.price)), 0);
+  // Seen live: for "items 2 and 3" the model listed only those two lines, all selected. A caption that picks by
+  // number is then still a split when the listed prices stay under the printed subtotal (flagged for review below).
+  const onlyPicked = /\b(items?|no|nomor)\.?\s*\d/i.test(text) && sum(mine) < vNum(t.receipt && t.receipt.subtotal) * 0.99;
+  if (c.inbox.kind === 'photo' && !c.statement && t.type === 'expense' && text.trim() && mine.length && (mine.length < items.length || onlyPicked)) {
+    const listed = sum(items);
+    const sub = vNum(t.receipt && t.receipt.subtotal) || listed;
+    const bill = total || amount;
+    const share = Math.round(sum(mine) + ((bill - sub) * sum(mine)) / sub);
+    if (share > 0 && share < bill) {
+      if (Math.abs(listed - sub) > sub * 0.01) review.push(MSG.reviewSplit());
+      split = { count: mine.length, selected: sum(mine), share, total: bill, names: mine.map((i) => i.name) };
+      amount = share;
+    }
+  }
+
   const tag = (/#(need|want)\b/i.exec(text) || [])[1];
   const confidence = vNum(t.confidence);
   const row = {
@@ -143,10 +186,10 @@ function vBuildTxn(t, c) {
     nature: vNature(t.type, tag, cat, t.nature),
     merchant: t.merchant || '',
     note: t.note || '',
-    items: Array.isArray(t.items) ? t.items.length : 0,
-    receipt_total: total > 0 ? total : '',
+    items: split ? split.count : items.length,
+    receipt_total: split ? split.total : total > 0 ? total : '',
     irregular: VALIDATE_ANNUAL.test(text) || vTrue(t.irregular),
-    source: c.inbox.kind === 'photo' ? 'photo' : 'text',
+    source: c.statement ? 'statement' : c.inbox.kind === 'photo' ? 'photo' : 'text',
     recurring_id: '',
     raw_input: text,
     tg_file_id: c.inbox.file_id || '',
@@ -154,7 +197,7 @@ function vBuildTxn(t, c) {
     status: confidence < VALIDATE_MIN_CONFIDENCE || review.length ? 'needs_review' : 'ok',
   };
 
-  if (!fee) return { rows: [row], review };
+  if (!fee) return { rows: [row], review, split };
   const feeCat = vFind(categories, 'id', 'bank-fee');
   if (!feeCat || !vTrue(feeCat.active)) return { reply: MSG.badCategory('bank-fee') };
   const feeRow = {
@@ -170,10 +213,10 @@ function vBuildTxn(t, c) {
     receipt_total: '',
     irregular: false,
   };
-  return { rows: [row, feeRow], review };
+  return { rows: [row, feeRow], review, split };
 }
 
-function validateParse({ parsed, inbox, categories, accounts, nextIdNum, now }) {
+function validateParse({ parsed, inbox, categories, accounts, transactions, nextIdNum, now }) {
   const text = inbox.text || '';
   const missing = parsed.missing || [];
   const txns = parsed.transactions || [];
@@ -200,19 +243,27 @@ function validateParse({ parsed, inbox, categories, accounts, nextIdNum, now }) 
   const fees = txns.map((t) => Math.round(Math.abs(vNum(t.fee)))).filter(Boolean);
   const kept = txns.filter((t) => !(t.type === 'expense' && t.category_id === 'bank-fee' && !vNum(t.fee) && fees.includes(Math.round(Math.abs(vNum(t.amount))))));
 
+  // A photo captioned "statement" (or "mutasi"), or one that lists several transactions, is a bank
+  // statement: rows that are already in the ledger are skipped instead of written twice
+  c.statement = inbox.kind === 'photo' && (/(^|[^a-z])(statement|mutasi)($|[^a-z])/i.test(text) || kept.length > 1);
+  const used = new Set();
   const rows = [];
   const review = [];
+  const notes = [];
   for (const t of kept) {
     const r = vBuildTxn(t, c);
     if (r.reply) return { ok: false, reply: r.reply };
+    if (c.statement && vLogged(r.rows[0], transactions || [], used)) continue;
     rows.push(...r.rows);
     review.push(...r.review);
+    if (r.split) notes.push(MSG.split(r.split));
   }
   rows.forEach((r, i) => {
     r.id = 'T' + String(Number(nextIdNum) + i).padStart(4, '0');
   });
   const hint = rows.some((r) => r.status === 'needs_review') ? [MSG.reviewHint()] : [];
-  return { ok: true, rows, reply: [MSG.saved(rows, categories), ...new Set(review), ...hint].join('\n') };
+  const head = c.statement ? MSG.statement(kept.length, rows, categories) : MSG.saved(rows, categories);
+  return { ok: true, rows, reply: [head, ...notes, ...new Set(review), ...hint].join('\n') };
 }
 
 if (typeof module !== 'undefined') module.exports = { validateParse };

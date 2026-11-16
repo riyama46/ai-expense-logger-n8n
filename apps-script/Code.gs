@@ -5,7 +5,8 @@ const INBOX_COLS = ['update_id', 'received_at', 'msg_date', 'chat_id', 'kind', '
 const TX_COLS = ['id', 'inbox_update_id', 'batch_id', 'created_at', 'txn_date', 'txn_time', 'type', 'amount', 'account', 'to_account', 'category_id', 'nature', 'merchant', 'note', 'items', 'receipt_total', 'irregular', 'source', 'recurring_id', 'raw_input', 'tg_file_id', 'confidence', 'status'];
 const ACCOUNT_COLS = ['account', 'opening_balance', 'opening_date', 'liquid', 'is_default', 'balance'];
 const CATEGORY_COLS = ['id', 'group', 'name', 'type', 'default_nature', 'aliases', 'active'];
-const TX_TEXT_COLS = ['id', 'inbox_update_id', 'batch_id', 'created_at', 'txn_date', 'txn_time'];
+const RECURRING_COLS = ['id', 'name', 'type', 'amount', 'account', 'to_account', 'category_id', 'nature', 'cycle', 'interval', 'day', 'start_date', 'end_date', 'mode', 'last_run', 'active'];
+const TX_TEXT_COLS =['id', 'inbox_update_id', 'batch_id', 'created_at', 'txn_date', 'txn_time'];
 
 // Jakarta has no DST, so a fixed +07:00 shift is exact.
 function jakartaIso(ms) {
@@ -184,6 +185,14 @@ function setup() {
   if (cat.empty) {
     const rows = SEED.categories.map(c => CATEGORY_COLS.map(k => c[k]));
     cat.sheet.getRange(2, 1, rows.length, CATEGORY_COLS.length).setValues(rows);
+  }
+
+  // Safe to run again on an existing Sheet: it only adds what is missing.
+  const rec = ensureTab(ss, 'Recurring', RECURRING_COLS);
+  rec.sheet.getRange(1, 1, rec.sheet.getMaxRows(), RECURRING_COLS.length).setNumberFormat('@'); // dates and "03-15" stay as typed
+  if (rec.empty) {
+    const rows = SEED.recurring.map(r => RECURRING_COLS.map(k => r[k]));
+    rec.sheet.getRange(2, 1, rows.length, RECURRING_COLS.length).setValues(rows);
   }
 
   const state = ensureTab(ss, 'State', ['key', 'value']);

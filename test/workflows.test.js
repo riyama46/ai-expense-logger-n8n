@@ -31,8 +31,8 @@ const NOW_TEXT = new Date(Date.now() - 3600000).toISOString(); // an hour ago, s
 const config = { sheetId: 'YOUR_SHEET_ID', chatId: 'YOUR_CHAT_ID' };
 const inbox = (o) => ({ row_number: 2, update_id: '501', msg_date: NOW_TEXT, chat_id: '1', kind: 'text', text: 'makan padang 25rb', file_id: '', status: 'processing', config, ...o });
 
-test('dist has the five workflows, inactive, Asia/Jakarta', () => {
-  assert.deepEqual(Object.keys(raw).sort(), ['commands.json', 'monthly-summary.json', 'nudge.json', 'parse-entry.json', 'process-inbox.json']);
+test('dist has the six workflows, inactive, Asia/Jakarta', () => {
+  assert.deepEqual(Object.keys(raw).sort(), ['commands.json', 'monthly-summary.json', 'nudge.json', 'parse-entry.json', 'process-inbox.json', 'recurring.json']);
   for (const f of Object.keys(raw)) {
     assert.equal(wf(f).active, false);
     assert.equal(wf(f).settings.timezone, 'Asia/Jakarta');
@@ -57,7 +57,7 @@ test('no secret or real id in dist', () => {
     for (const n of wf(f).nodes) for (const c of Object.values(n.credentials || {})) assert.equal(c.id, 'PLACEHOLDER');
   }
   const values = (f) => wf(f).nodes.find((n) => n.name === 'Config').parameters.assignments.assignments;
-  for (const f of ['process-inbox.json', 'nudge.json', 'monthly-summary.json']) {
+  for (const f of ['process-inbox.json', 'nudge.json', 'monthly-summary.json', 'recurring.json']) {
     for (const a of values(f).filter((a) => /sheet|chat/i.test(a.name))) assert.match(a.value, /^YOUR_/);
   }
 });
@@ -121,7 +121,8 @@ test('Build request: a scrolling screenshot is refused before the LLM, a normal 
 
 test('Run command: /balance and /undo return {inbox, reply, appendRows, voidIds}', () => {
   const tx = [{ id: 'T0001', batch_id: 'B1', status: 'ok' }, { id: 'T0002', batch_id: 'B2', status: 'ok' }, { id: 'T0003', batch_id: 'B2', status: 'ok' }];
-  const cmd = (text) => run('commands.json', 'Run command', [{}], { Start: [inbox({ kind: 'command', text })], Transactions: tx, Accounts: ACCOUNTS, Categories: CATEGORIES })[0].json;
+  const cmd = (text) => run('commands.json', 'Run command', [{}], { Start: [inbox({ kind: 'command', text })], Transactions: tx, Accounts: ACCOUNTS, Categories: CATEGORIES, Recurring: [{ error: 'no such tab' }] })[0].json;
+  assert.match(cmd('/recurring').reply, /^No active recurring rules/);
   const bal = cmd('/balance');
   assert.match(bal.reply, /^Balance\n/);
   assert.deepEqual([bal.appendRows, bal.voidIds], [[], []]);
@@ -141,6 +142,59 @@ test('Result: rows and voids become write items carrying the Inbox update', () =
   assert.deepEqual(confirm.map((i) => [i.json.id, i.json.status]), [['T0016', 'ok'], ['T0025', 'ok']]);
   const none = run('process-inbox.json', 'Result', [{ inbox: inbox(), ok: false, reply: 'ask' }]);
   assert.deepEqual([none.length, none[0].json.status, none[0].json.reply, none[0].json.id], [1, 'done', 'ask', undefined]);
+});
+
+const RULE = { id: 'R1', name: 'KPR', type: 'expense', amount: 5000000, account: 'BCA', category_id: 'food', cycle: 'monthly', interval: 1, day: 5, start_date: '2020-01-05', mode: 'auto', last_run: '', active: 'TRUE' };
+
+test('Recurring: the trigger queues "/recurring run" only when a rule is due', () => {
+  const due = (rules) => run('recurring.json', 'Due?', rules, { Config: [config] });
+  assert.deepEqual(due([{}]), []);
+  assert.deepEqual(due([{ ...RULE, start_date: '2999-01-05' }]), []);
+  const [q] = due([RULE]);
+  assert.match(q.json.update_id, /^R\d+$/);
+  assert.deepEqual([q.json.kind, q.json.text, q.json.status, q.json.chat_id], ['command', '/recurring run', 'new', 'YOUR_CHAT_ID']);
+  const w = wf('recurring.json');
+  assert.deepEqual(w.nodes.filter((n) => /Trigger$/.test(n.type)).map((n) => n.name), ['Daily 07:00', 'On start', 'Run now']);
+  assert.equal(w.nodes.find((n) => n.name === 'Queue').parameters.sheetName.value, 'Inbox');
+});
+
+test('Recurring: the run writes the entry first, last_run after it, and may be retried', () => {
+  const last = new Date(Date.now() + 7 * 3600000 - 40 * 86400000).toISOString().slice(0, 10); // one or two 5ths ago
+  const nodes = (o) => ({ Start: [inbox({ kind: 'command', text: '/recurring run', update_id: 'R9', ...o })], Transactions: [{ id: 'T0007' }], Accounts: ACCOUNTS, Categories: CATEGORIES, Recurring: [{ ...RULE, last_run: last }] });
+  const [out] = run('commands.json', 'Run command', [{}], nodes());
+  assert.ok(out.json.appendRows.length >= 1);
+  assert.deepEqual([out.json.appendRows[0].id, out.json.appendRows[0].source, out.json.appendRows[0].recurring_id, out.json.appendRows[0].batch_id], ['T0008', 'recurring', 'R1', 'BR9']);
+  assert.equal(out.json.ruleUpdates[0].id, 'R1');
+  assert.doesNotThrow(() => run('commands.json', 'Run command', [{}], nodes({ retry: true })));
+  assert.throws(() => run('commands.json', 'Run command', [{}], { ...nodes({ retry: true, text: '/undo' }) }), /interrupted/);
+
+  const items = run('process-inbox.json', 'Result', [out.json]);
+  assert.equal(items[0].json._m.ruleUpdates[0].id, 'R1');
+  assert.deepEqual(run('process-inbox.json', 'Result', [{ ...inbox(), error: 'x', ruleUpdates: [{ id: 'R1' }] }])[0].json.ruleUpdates, []);
+  const m = items[0].json._m;
+  const rules = run('process-inbox.json', 'Rules', [m]);
+  assert.deepEqual([rules[0].json.id, rules[0].json.last_run, rules[0].json._m.update_id], ['R1', out.json.ruleUpdates[0].last_run, 'R9']);
+  assert.equal(run('process-inbox.json', 'Rules saved', [rules[0].json])[0].json.update_id, 'R9');
+  const plain = run('process-inbox.json', 'Rules', [{ update_id: '501', ruleUpdates: [] }]);
+  assert.deepEqual([plain.length, plain[0].json._m], [1, undefined]);
+
+  const c = wf('process-inbox.json').connections;
+  assert.equal(c.Saved.main[0][0].node, 'Rules');
+  assert.equal(c['Save failed'].main[0][0].node, 'Mark row'); // a failed save never moves last_run
+  assert.deepEqual(c['Has writes?'].main.map((o) => o[0].node), ['Write Transactions', 'Rules']);
+  assert.deepEqual(c['Has rules?'].main.map((o) => o[0].node), ['Update Recurring', 'Mark row']);
+  assert.equal(c['Rules saved'].main[0][0].node, 'Mark row');
+});
+
+test('Validate: a statement photo skips what the Sheet already has', () => {
+  const t = (o) => ({ type: 'expense', amount: 25000, account: 'BCA', to_account: null, category_id: 'food', nature: 'need', merchant: 'A', note: null, txn_date: NOW_TEXT.slice(0, 10), txn_time: null, fee: 0, irregular: false, items: [], receipt: null, confidence: 0.9, ...o });
+  const parsed = { transactions: [t({}), t({ amount: 40000, merchant: 'B' })], missing: [], reply_hint: null };
+  const [out] = run('parse-entry.json', 'Validate', [{ choices: [{ message: { content: JSON.stringify(parsed) } }] }], {
+    Start: [inbox({ kind: 'photo', text: '', file_id: 'F1' })], Categories: CATEGORIES, Accounts: ACCOUNTS,
+    Transactions: [{ id: 'T0003', type: 'expense', amount: 25000, account: 'BCA', txn_date: NOW_TEXT.slice(0, 10), status: 'ok' }],
+  });
+  assert.deepEqual(out.json.rows.map((r) => [r.id, r.amount, r.source]), [['T0004', 40000, 'statement']]);
+  assert.match(out.json.reply, /^2 rows: 1 already logged, 1 added \(#T0004\)\. \/undo removes this batch\./);
 });
 
 test('Result: sub-workflow error marks the row error with the error reply', () => {
@@ -210,4 +264,15 @@ test('Build summary: the monthly send covers the month that just ended', () => {
   assert.equal(w.nodes[0].parameters.rule.interval[0].expression, '0 8 1 * *');
   const send = w.nodes.find((n) => n.type === 'n8n-nodes-base.telegram');
   assert.deepEqual([send.retryOnFail, send.maxTries], [true, 3]);
+});
+
+// n8n retries a node (retryOnFail) whenever its first output item has an `error` field that is not
+// undefined, null or false, and an Inbox row always has one (""). Live on 2026-11-16: Queue appended
+// "/recurring run" three times and every Inbox read or update took 15 s instead of 1 s.
+test('nodes that output Inbox rows do not retry', () => {
+  for (const f of Object.keys(raw)) {
+    for (const n of wf(f).nodes.filter((n) => n.type === 'n8n-nodes-base.googleSheets' && n.parameters.sheetName.value === 'Inbox')) {
+      assert.equal(n.retryOnFail, undefined, `${f} ${n.name}`);
+    }
+  }
 });

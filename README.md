@@ -35,6 +35,9 @@ Two parts with different jobs:
 - Low-confidence entries are saved as `needs_review` and marked `⚠️`; `/review` lists them and `/ok` confirms them.
 - A daily 21:00 nudge with the number of entries logged that day, which also shows the system is alive.
 - A monthly summary sent on the 1st at 08:00.
+- Recurring rules kept in a `Recurring` tab (weekly, monthly or yearly): `auto` rules write the entry on the due date, `reminder` rules only send a message, and dates missed while n8n was off are caught up.
+- Bank statement import: a screenshot of a transaction list becomes one entry per row, and rows already in the ledger are skipped (`4 rows: 2 already logged, 2 added`).
+- Receipt split: caption a receipt with `items 2 and 3` and only your share is saved, including its part of tax, service and discount.
 
 | Command | What it does |
 | --- | --- |
@@ -42,6 +45,7 @@ Two parts with different jobs:
 | `/last`, `/last 10` | Show the latest entries. |
 | `/review`, `/ok`, `/ok 16 25` | List and confirm entries that need review. |
 | `/summary`, `/summary 2026-10` | A month in numbers: totals by group, need vs want, irregular items, runway. |
+| `/recurring` | Active recurring rules and when each is next due. |
 | `/balance` | Account balances and the liquid total. |
 | `/cash 150000` | Set real cash; the difference is logged as unrecorded cash. |
 
@@ -55,6 +59,8 @@ Two parts with different jobs:
 - The model put entries on the wrong account in both directions. For text messages the account is now decided from the text.
 - A fee returned twice (as `fee` and as its own expense) is written once.
 - A date without a year came back as 2023. The year is now resolved in code from the message time.
+- Asked for "items 2 and 3" of a receipt, the model listed only those two lines, so nothing looked like a split and the whole bill was saved. The share is computed in code from the printed subtotal, and that case is flagged for review.
+- n8n reruns a node with "retry on fail" when its output has an `error` field, even an empty one. A queue row was appended three times and every Inbox update took 15 s instead of 1 s, until retry was removed from those nodes.
 - A long scrolling screenshot is shrunk by Telegram until it is unreadable, and the model made up rows. Photos with a height to width ratio above 5 are refused before the LLM call.
 
 **Nothing is lost quietly.** Every message gets a row in `Inbox` with a status (`new`, `processing`, `done`, `error`). A failed LLM call marks the row `error` and sends a `🔴` reply; later messages still go through. A row stuck in `processing` for 30 minutes is retried, and the retry checks for rows already written, so nothing is saved twice.
@@ -69,17 +75,17 @@ Two parts with different jobs:
 npm test
 ```
 
-99 tests, no network. `fixtures/text.json` holds 20 text messages with their expected rows; they can be run against the real model (`fixtures/run.js`, or `fixtures/n8n-runner.js` to use the credential stored in n8n). With the guards above, `gpt-4o-mini` passes 20 of 20.
+126 tests, no network. `fixtures/text.json` holds 20 text messages with their expected rows; they can be run against the real model (`fixtures/run.js`, or `fixtures/n8n-runner.js` to use the credential stored in n8n). With the guards above, `gpt-4o-mini` passes 20 of 20.
 
 ## Layout
 
 ```
 apps-script/Code.gs      capture: pollUpdates (1-minute trigger), setup(), installPolling()
-data/seed.json           sample categories, accounts, state
+data/seed.json           sample categories, accounts, a recurring rule, state
 n8n/code/*.js            pure logic, unit tested
 n8n/workflows/*.json     workflow templates; Code nodes pull in the logic files
 n8n/build.js             templates -> n8n/dist/*.json (import these)
-n8n/dist/*.json          five workflows: Process Inbox, Parse Entry, Commands, Nudge, Monthly summary
+n8n/dist/*.json          six workflows: Process Inbox, Parse Entry, Commands, Nudge, Monthly summary, Recurring
 fixtures/                text fixtures and their runners
 test/                    node --test
 docs/SETUP.md            setup steps
@@ -95,7 +101,8 @@ You need a Telegram bot, a Google account, an OpenAI API key and n8n 2.45 or lat
 - Replies take about one to two minutes, because both capture and processing poll every minute.
 - No edit by chat yet: fix a row in the Sheet, or `/undo <id>` and send it again.
 - A Telegram reply can still be lost or sent twice when the network is very slow; the ledger row itself is written once.
-- Receipt splitting, bank statement import with dedupe and recurring entries are not built.
+- Receipt split and statement import are checked with unit tests and rendered sample images; real statements and receipts in volume have not been measured.
+- Downloading a photo from Telegram inside n8n has no timeout; a stuck download holds the queue until the run is stopped or the 30-minute stale window passes.
 - Tested with synthetic receipts and real bank screenshots; a wide set of real paper receipts has not been measured.
 
 ## License

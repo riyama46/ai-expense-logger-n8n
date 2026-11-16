@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-Object.assign(globalThis, require('../n8n/code/messages.js'));
+Object.assign(globalThis, require('../n8n/code/messages.js'), require('../n8n/code/recurring.js'));
 const { runCommand, countToday } = require('../n8n/code/commands.js');
 const { ACCOUNTS } = require('./sample.test.js');
 
@@ -105,7 +105,7 @@ test('matching is case-insensitive and ignores @botname', () => {
 });
 
 test('unknown commands, including v1b ones', () => {
-  for (const t of ['/recurring', '/foo', '/']) {
+  for (const t of ['/split', '/foo', '/']) {
     const r = run(t);
     assert.equal(r.reply, MSG.unknownCommand());
     assert.deepEqual([r.appendRows, r.voidIds], [[], []]);

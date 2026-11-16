@@ -1,0 +1,234 @@
+{
+  "id": "ExpRecurring0001",
+  "name": "Recurring",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "pinData": {},
+  "nodes": [
+    {
+      "name": "Daily 07:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "On start",
+      "type": "n8n-nodes-base.n8nTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        100
+      ],
+      "parameters": {
+        "events": [
+          "init"
+        ]
+      }
+    },
+    {
+      "name": "Run now",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        500
+      ],
+      "parameters": {}
+    },
+    {
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "sheetId",
+              "name": "sheetId",
+              "value": "YOUR_SHEET_ID",
+              "type": "string"
+            },
+            {
+              "id": "chatId",
+              "name": "chatId",
+              "value": "YOUR_CHAT_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Rules",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        440,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true,
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.sheetId }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Recurring"
+        },
+        "operation": "read",
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PLACEHOLDER",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "name": "Due?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const REC_WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];\r\nconst REC_MAX_CATCHUP = 12; // more due dates than this in one run is a wrong start_date, not a laptop that was off\r\n\r\nfunction recTrue(x) {\r\n  return x === true || String(x).toUpperCase() === 'TRUE';\r\n}\r\n\r\n// A real calendar date in YYYY-MM-DD, else ''\r\nfunction recDate(d) {\r\n  const s = String(d || '').trim().slice(0, 10);\r\n  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(s)) return '';\r\n  const ms = Date.parse(s + 'T00:00:00Z');\r\n  return !isNaN(ms) && new Date(ms).toISOString().slice(0, 10) === s ? s : '';\r\n}\r\n\r\n// Day `d` of month `m` (1-12, may overflow into other years); 29-31 fall back to the last day of a short month\r\nfunction recDay(y, m, d) {\r\n  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();\r\n  return new Date(Date.UTC(y, m - 1, Math.min(d, last))).toISOString().slice(0, 10);\r\n}\r\n\r\n// Every due date of a rule that is later than `after` ('' = from start_date) and not later than `until`.\r\n// Returns {dates} or {error}. `limit` stops a rule that would return more than that many dates.\r\nfunction recDue(rule, after, until, limit) {\r\n  const start = recDate(rule.start_date);\r\n  if (!start) return { error: 'start_date must be a date like 2026-12-05' };\r\n  const end = recDate(rule.end_date);\r\n  if (String(rule.end_date || '').trim() && !end) return { error: 'end_date must be a date like 2026-12-05 or empty' };\r\n  const every = Math.round(Number(rule.interval)) || 1;\r\n  if (every < 1) return { error: 'interval must be 1 or more' };\r\n  const cycle = String(rule.cycle || '').trim().toLowerCase();\r\n  const day = String(rule.day || '').trim().toLowerCase();\r\n  const [sy, sm] = start.split('-').map(Number);\r\n\r\n  let at; // k -> date of the k-th cycle\r\n  if (cycle === 'monthly') {\r\n    const d = Number(day);\r\n    if (!(Number.isInteger(d) && d >= 1 && d <= 31)) return { error: 'day must be 1 to 31 for a monthly rule' };\r\n    // the interval counts from the first date on or after start_date\r\n    const skip = recDay(sy, sm, d) < start ? 1 : 0;\r\n    at = (k) => recDay(sy, sm + skip + k * every, d);\r\n  } else if (cycle === 'yearly') {\r\n    const m = /^(\\d{1,2})-(\\d{1,2})$/.exec(day);\r\n    if (!m || Number(m[1]) < 1 || Number(m[1]) > 12 || Number(m[2]) < 1 || Number(m[2]) > 31) return { error: 'day must be MM-DD for a yearly rule, e.g. 03-15' };\r\n    const skip = recDay(sy, Number(m[1]), Number(m[2])) < start ? 1 : 0;\r\n    at = (k) => recDay(sy + skip + k * every, Number(m[1]), Number(m[2]));\r\n  } else if (cycle === 'weekly') {\r\n    const n = Number(day);\r\n    const wd = Number.isInteger(n) && n >= 1 && n <= 7 ? n % 7 : REC_WEEKDAYS.indexOf(day.slice(0, 3));\r\n    if (wd < 0 || !day) return { error: 'day must be a weekday (mon to sun) for a weekly rule' };\r\n    const startMs = Date.parse(start + 'T00:00:00Z');\r\n    const first = startMs + ((wd - new Date(startMs).getUTCDay() + 7) % 7) * 86400000;\r\n    at = (k) => new Date(first + k * every * 7 * 86400000).toISOString().slice(0, 10);\r\n  } else {\r\n    return { error: 'cycle must be weekly, monthly or yearly' };\r\n  }\r\n\r\n  const stop = end && end < until ? end : until;\r\n  const dates = [];\r\n  for (let k = 0; k < 5000; k++) {\r\n    const date = at(k);\r\n    if (date > stop) break;\r\n    if (date < start || (after && date <= after)) continue;\r\n    dates.push(date);\r\n    if (limit && dates.length > limit) break;\r\n  }\r\n  return { dates };\r\n}\r\n\r\n// What is wrong with an auto rule's entry, or ''\r\nfunction recCheck(rule, type, accounts, categories) {\r\n  const acc = (name) => accounts.find((a) => String(a.account).trim().toLowerCase() === String(name || '').trim().toLowerCase());\r\n  if (!['expense', 'income', 'transfer'].includes(type)) return 'type must be expense, income or transfer';\r\n  if (!(Math.round(Number(rule.amount)) > 0)) return 'an auto rule needs an amount';\r\n  if (!acc(rule.account)) return `unknown account \"${rule.account || ''}\"`;\r\n  if (type === 'transfer') {\r\n    if (!acc(rule.to_account)) return `unknown to_account \"${rule.to_account || ''}\"`;\r\n    if (acc(rule.to_account) === acc(rule.account)) return 'a transfer needs two different accounts';\r\n    return '';\r\n  }\r\n  const cat = categories.find((c) => c.id === String(rule.category_id || '').trim());\r\n  if (!cat || !recTrue(cat.active)) return `category \"${rule.category_id || ''}\" is missing or inactive`;\r\n  if (cat.type !== type && cat.type !== 'both') return `category \"${cat.id}\" is not an ${type} category`;\r\n  return '';\r\n}\r\n\r\nfunction recActive(rules) {\r\n  return (rules || []).filter((r) => String(r.id || '').trim() && recTrue(r.active));\r\n}\r\n\r\n// Writes the due entries of auto rules, lists the due reminders, and returns the new last_run of every\r\n// rule that was handled. ruleUpdates must be saved only after appendRows are in the Sheet.\r\nfunction runRecurring({ rules, transactions, accounts, categories, nextIdNum, inbox, now }) {\r\n  const nowJ = new Date(Date.parse(now) + 7 * 3600000).toISOString();\r\n  const today = nowJ.slice(0, 10);\r\n  const lines = [];\r\n  const appendRows = [];\r\n  const ruleUpdates = [];\r\n  for (const rule of recActive(rules)) {\r\n    const id = String(rule.id).trim();\r\n    const mode = String(rule.mode || '').trim().toLowerCase();\r\n    const type = String(rule.type || '').trim().toLowerCase();\r\n    const due = recDue(rule, recDate(rule.last_run), today, REC_MAX_CATCHUP);\r\n    let bad = due.error || '';\r\n    if (!bad && !due.dates.length) continue;\r\n    if (!bad && mode !== 'auto' && mode !== 'reminder') bad = 'mode must be auto or reminder';\r\n    if (!bad && due.dates.length > REC_MAX_CATCHUP) bad = `more than ${REC_MAX_CATCHUP} dates are due; check start_date and last_run`;\r\n    if (!bad && mode === 'auto') bad = recCheck(rule, type, accounts, categories);\r\n    if (bad) {\r\n      lines.push(MSG.recurringBad(rule.name || id, bad));\r\n      continue;\r\n    }\r\n    for (const date of due.dates) {\r\n      if (mode === 'reminder') {\r\n        lines.push(MSG.recurringReminder(rule, date, today));\r\n        continue;\r\n      }\r\n      // a run that stopped after the write but before last_run was saved must not write the date twice\r\n      if (transactions.some((t) => String(t.recurring_id || '').trim() === id && String(t.txn_date).slice(0, 10) === date)) continue;\r\n      const cat = categories.find((c) => c.id === String(rule.category_id || '').trim());\r\n      const nature = [rule.nature, cat && cat.default_nature].map((x) => String(x || '').toLowerCase()).find((x) => x === 'need' || x === 'want');\r\n      const row = {\r\n        id: 'T' + String(Number(nextIdNum) + appendRows.length).padStart(4, '0'),\r\n        inbox_update_id: inbox.update_id,\r\n        batch_id: 'B' + inbox.update_id,\r\n        created_at: nowJ.slice(0, 19) + '+07:00',\r\n        txn_date: date,\r\n        txn_time: '',\r\n        type,\r\n        amount: Math.round(Number(rule.amount)),\r\n        account: accounts.find((a) => String(a.account).trim().toLowerCase() === String(rule.account).trim().toLowerCase()).account,\r\n        to_account: type === 'transfer' ? accounts.find((a) => String(a.account).trim().toLowerCase() === String(rule.to_account).trim().toLowerCase()).account : '',\r\n        category_id: type === 'transfer' ? '' : cat.id,\r\n        nature: type === 'expense' ? nature || '' : '',\r\n        merchant: '',\r\n        note: rule.name || id,\r\n        items: '',\r\n        receipt_total: '',\r\n        irregular: false,\r\n        source: 'recurring',\r\n        recurring_id: id,\r\n        raw_input: inbox.text || '',\r\n        tg_file_id: '',\r\n        confidence: 1,\r\n        status: 'ok',\r\n      };\r\n      appendRows.push(row);\r\n      lines.push(MSG.recurringLogged(row));\r\n    }\r\n    ruleUpdates.push({ id, last_run: due.dates[due.dates.length - 1] });\r\n  }\r\n  return { reply: lines.join('\\n') || MSG.recurringNothing(), appendRows, voidIds: [], ruleUpdates };\r\n}\r\n\r\n// True when runRecurring would write, remind or complain: the daily trigger only queues a run then\r\nfunction recurringPending(rules, now) {\r\n  const today = new Date(Date.parse(now) + 7 * 3600000).toISOString().slice(0, 10);\r\n  return recActive(rules).some((r) => {\r\n    const due = recDue(r, recDate(r.last_run), today, 1);\r\n    return Boolean(due.error) || due.dates.length > 0;\r\n  });\r\n}\r\n\r\n// /recurring: active rules with the next date each one is due\r\nfunction listRecurring(rules, now) {\r\n  const today = new Date(Date.parse(now) + 7 * 3600000).toISOString().slice(0, 10);\r\n  const items = recActive(rules).map((rule) => {\r\n    const due = recDue(rule, recDate(rule.last_run), '9999-12-31', 1);\r\n    return { rule, error: due.error || '', next: due.error ? '' : due.dates[0] || '' };\r\n  });\r\n  return { reply: MSG.recurringList(items, today), appendRows: [], voidIds: [] };\r\n}\n// The rules run inside Process Inbox, one message at a time, so the entry ids and /undo cannot race a\n// message that is being processed. This workflow only puts \"/recurring run\" in the queue, and only\n// when a rule is due (or broken), so a normal day stays silent.\nconst now = new Date();\nconst rules = $input.all().map((i) => i.json).filter((r) => r.id); // an empty tab gives one {} item\nif (!recurringPending(rules, now.toISOString())) return [];\nconst stamp = new Date(now.getTime() + 7 * 3600000).toISOString().slice(0, 19) + '+07:00';\nreturn [{\n  json: {\n    update_id: 'R' + now.getTime(), // Telegram ids are plain numbers, so this never collides\n    received_at: stamp,\n    msg_date: stamp,\n    chat_id: String($('Config').first().json.chatId),\n    kind: 'command',\n    text: '/recurring run',\n    file_id: '',\n    status: 'new',\n    error: '',\n    processed_at: '',\n  },\n}];"
+      }
+    },
+    {
+      "name": "Queue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.sheetId }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Inbox"
+        },
+        "operation": "append",
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {
+          "cellFormat": "RAW",
+          "handlingExtraData": "ignoreIt"
+        }
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "PLACEHOLDER",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 07:00": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "On start": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rules": {
+      "main": [
+        [
+          {
+            "node": "Due?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Due?": {
+      "main": [
+        [
+          {
+            "node": "Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

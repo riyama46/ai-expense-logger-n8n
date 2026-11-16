@@ -21,7 +21,7 @@ Manual steps, in order. Values in `<angle brackets>` are yours; never commit the
    - `BOT_TOKEN` = `<BOT_TOKEN>`
    - `ALLOWED_CHAT_ID` = `<CHAT_ID>`
    - `SHEET_ID` = `<SHEET_ID>`
-5. In the editor select `setup` and click **Run**; approve the permissions. The Sheet now has the tabs Inbox, Transactions, Accounts, Categories, State.
+5. In the editor select `setup` and click **Run**; approve the permissions. The Sheet now has the tabs Inbox, Transactions, Accounts, Categories, Recurring, State. `setup` only adds what is missing, so it is safe to run again after an update (that is how an existing Sheet gets the `Recurring` tab: paste the new `Code.gs` and `Seed.gs`, run `setup`).
 6. Select `installPolling` and click **Run**; approve the permissions. It removes any old webhook and adds a trigger that runs `pollUpdates` every minute (check **Triggers**, the clock icon). No web app deployment is needed: a web app answers Telegram with a 302 redirect, which Telegram counts as a failed delivery and then stops delivering newer messages.
 7. Send `test` to the bot. Within about a minute you get `📥 Received` and a row with `status=new` in `Inbox`. (Delete that row before step 5 below, or it will be processed.)
 
@@ -32,7 +32,13 @@ Script Properties `TG_OFFSET` and `TG_TRIES` are written by `pollUpdates`; leave
 1. `State` tab: set `llm_model` to the OpenAI model id you chose (replace `SET_ME`). It must support image input and structured outputs (`response_format` with `json_schema`).
 2. Opening balances. If a large monthly debit (a mortgage, for example) is about to land, set them after it has cleared, so it is already inside the bank balance.
    - `Accounts` tab: for each account set `opening_balance` (the balance shown in your bank app or old ledger, whole rupiah) and `opening_date` (cutover day, `YYYY-MM-DD`). Do not edit the `balance` column; it is a formula.
-3. Keep `Transactions` columns A to F (`id` to `txn_time`) as plain text: select the column headers > **Format** > **Number** > **Plain text**. When you fix a date in the Sheets app, type it as `2026-11-01`.
+3. `Recurring` tab (one row per rule; `/recurring` shows what the bot understood and when each rule is next due):
+   - `type` expense, income or transfer; `account` (and `to_account` for a transfer) as in `Accounts`; `category_id` as in `Categories`.
+   - `cycle` weekly, monthly or yearly; `interval` 1 = every cycle, 2 = every second one; `day` is 1 to 31 for monthly (29 to 31 fall back to the last day of a short month), `mon` to `sun` for weekly, `MM-DD` for yearly.
+   - `start_date` is the first day the rule may fire, `YYYY-MM-DD`. Set it to the next due date, or the bot logs the dates since then as well (more than 12 at once is refused). `end_date` empty = never ends.
+   - `mode` `auto` writes the entry, dated on the due date; `reminder` only sends a message. `active` TRUE or FALSE. Leave `last_run` to the bot.
+   - The rules run every day at 07:00 and when n8n starts; dates missed while the computer was off are caught up. The seed rule (a mortgage on the 5th) is an example: change or delete it.
+4. Keep `Transactions` columns A to F (`id` to `txn_time`) as plain text: select the column headers > **Format** > **Number** > **Plain text**. When you fix a date in the Sheets app, type it as `2026-11-01`.
 
 ## 5. n8n
 
@@ -48,10 +54,11 @@ Script Properties `TG_OFFSET` and `TG_TRIES` are written by `pollUpdates`; leave
    - **Process Inbox**: `sheetId` = `<SHEET_ID>`, `chatId` = `<CHAT_ID>`. Leave `parseWorkflowId` and `commandsWorkflowId` as they are; they are the ids the import kept. (Only if you imported through the n8n UI instead: copy the ids from the URLs of Parse Entry and Commands.)
    - **Nudge**: `sheetId` = `<SHEET_ID>`, `chatId` = `<CHAT_ID>`.
    - **Monthly summary**: `sheetId` = `<SHEET_ID>`, `chatId` = `<CHAT_ID>`.
+   - **Recurring**: `sheetId` = `<SHEET_ID>`, `chatId` = `<CHAT_ID>`.
    Parse Entry and Commands have no Config node; they get the Sheet id from Process Inbox.
-5. Publish (activate) **Parse Entry** and **Commands** first, then **Process Inbox**, **Nudge** and **Monthly summary**. A sub-workflow runs its published version, so publish it again after every change.
+5. Publish (activate) **Parse Entry** and **Commands** first, then **Process Inbox**, **Nudge**, **Monthly summary** and **Recurring**. A sub-workflow runs its published version, so publish it again after every change.
 
-After a change to `n8n/workflows/*.json` or `n8n/code/*.js`: `npm run build`, then repeat steps 5.3, 5.4 and 5.5. The import overwrites the Config nodes with the `YOUR_SHEET_ID` and `YOUR_CHAT_ID` placeholders, so skipping 5.4 makes Process Inbox fail every minute without any Telegram message. (Shortcut: import a copy of `n8n/dist` kept outside the repo with the two ids already filled, then publish with `npx n8n@2.45.5 publish:workflow --id=<id>` for `ExpParseEntry001`, `ExpCommands00001`, `ExpProcessInbox1`, `ExpNudge00000001`, `ExpMonthlySum001` while n8n is stopped.)
+After a change to `n8n/workflows/*.json` or `n8n/code/*.js`: `npm run build`, then repeat steps 5.3, 5.4 and 5.5. The import overwrites the Config nodes with the `YOUR_SHEET_ID` and `YOUR_CHAT_ID` placeholders, so skipping 5.4 makes Process Inbox fail every minute without any Telegram message. (Shortcut: import a copy of `n8n/dist` kept outside the repo with the two ids already filled, then publish with `npx n8n@2.45.5 publish:workflow --id=<id>` for `ExpParseEntry001`, `ExpCommands00001`, `ExpProcessInbox1`, `ExpNudge00000001`, `ExpMonthlySum001`, `ExpRecurring0001` while n8n is stopped.)
 
 ## 6. Keep n8n running (Windows)
 

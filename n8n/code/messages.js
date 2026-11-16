@@ -186,6 +186,51 @@ const MSG = {
   cashUsage() {
     return '❓ How much cash do you have? Send e.g. "/cash 150000".';
   },
+  // row: the Transactions row a recurring rule wrote
+  recurringLogged(row) {
+    const where = row.type === 'transfer' ? `${row.account} → ${row.to_account}` : row.account;
+    return `📌 ${row.note} ${fmtRp(row.amount)} · ${where} · logged for ${fmtDate(row.txn_date)} (#${row.id}) · /undo ${Number(String(row.id).replace(/\D/g, ''))}`;
+  },
+  recurringReminder(rule, date, today) {
+    const amount = Number(rule.amount) > 0 ? `usually ${fmtRp(rule.amount)}` : 'amount varies';
+    const when = date === today ? 'due today' : `was due ${fmtDate(date)}`;
+    return `🔔 ${rule.name || rule.id} ${when} (${[amount, rule.account].filter(Boolean).join(', ')}). Log it when paid.`;
+  },
+  recurringBad(name, reason) {
+    return `❓ Recurring rule "${name}" skipped: ${reason}. Fix it in the Recurring tab.`;
+  },
+  recurringNothing() {
+    return 'No recurring items are due.';
+  },
+  // items: [{rule, next: 'YYYY-MM-DD' or '', error}]
+  recurringList(items, today) {
+    if (!items.length) return 'No active recurring rules. Add one in the Recurring tab.';
+    const lines = items.map(({ rule, next, error }) => {
+      const every = Math.round(Number(rule.interval)) > 1 ? `every ${Math.round(Number(rule.interval))} × ${rule.cycle}` : String(rule.cycle || '');
+      const parts = [rule.name || rule.id, Number(rule.amount) > 0 ? fmtRp(rule.amount) : 'amount varies', rule.account, every, rule.mode].filter(Boolean);
+      const when = error ? `❓ ${error}` : !next ? 'ended' : next <= today ? `due now (${fmtDate(next)})` : `next ${fmtDate(next)}`;
+      return `${parts.join(' · ')} · ${when}`;
+    });
+    return ['Recurring rules', ...lines].join('\n');
+  },
+  // Statement import: n rows read, `added` Transactions rows written (a fee row belongs to the row before it)
+  statement(n, added, categories) {
+    const kept = added.filter((r) => r.note !== 'Transfer fee').length;
+    const head = `${msgPlural(n, 'row', 'rows')}: ${n - kept} already logged, ${kept} added`;
+    if (!added.length) return `${head}. Nothing was saved.`;
+    const ids = added.length > 1 ? `#${added[0].id}-${added[added.length - 1].id}` : `#${added[0].id}`;
+    return `${head} (${ids}). /undo removes this batch.\n${MSG.saved(added, categories).replace(/ · \/undo$/, '')}`;
+  },
+  // Receipt split: what the share is made of
+  split(d) {
+    const extra = d.share - d.selected;
+    const parts = [`${msgPlural(d.count, 'item', 'items')} ${fmtRp(d.selected)}`];
+    if (extra) parts.push(`${extra > 0 ? 'tax and service share' : 'discount share'} ${fmtRp(Math.abs(extra))}`);
+    return `Split: ${parts.join(extra < 0 ? ' − ' : ' + ')} = ${fmtRp(d.share)} of the ${fmtRp(d.total)} bill (${d.names.join(', ')}).`;
+  },
+  reviewSplit() {
+    return 'Check the split: the item prices do not add up to the subtotal on the receipt.';
+  },
   help() {
     return [
       'Send a message or a receipt photo to log an entry, e.g. "makan padang 25rb".',
@@ -196,6 +241,8 @@ const MSG = {
       '/summary · show a month in numbers, e.g. /summary or /summary 2026-10',
       '/balance · show account balances, e.g. /balance',
       '/cash <amount> · set real cash, e.g. /cash 150000',
+      '/recurring · list recurring rules and their next date, e.g. /recurring',
+      'A receipt you shared: add a caption with your items, e.g. "items 2 and 3". A bank activity screenshot: entries already logged are skipped.',
       '/help · show this list, e.g. /help',
     ].join('\n');
   },
